@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+.qwen
+qwen_free_cli/
