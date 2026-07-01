@@ -1,9 +1,13 @@
+import shutil
+import subprocess
+import sys
 import tempfile
+import os
 from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QPixmap
+from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QMovie
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -15,14 +19,23 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from core.pipeline import GifBuildSettings, build_gif
+from io_module.gif_writer import write_gif  # <-- Добавлен импорт
 from gui.preview_widget import FramePreviewWidget
 from gui.resources.pixel_theme import PIXEL_THEME_STYLESHEET
 from gui.settings_panel import SettingsPanel
+
+_QUALITY_TO_PALETTE_SIZE: dict[int, int] = {
+    50: 64,
+    75: 128,
+    95: 256,
+}
 
 
 class GifWorker(QThread):
     finished = pyqtSignal(str)
     error = pyqtSignal(str)
+    progress = pyqtSignal(int, int, str)  # step, total, message
 
     def __init__(
         self,
@@ -39,38 +52,34 @@ class GifWorker(QThread):
 
     def run(self) -> None:
         try:
-            from PIL import Image
+            palette_size = _QUALITY_TO_PALETTE_SIZE.get(self._quality, 256)
 
-            images = []
-            for path in self._image_paths:
-                img = Image.open(str(path))
-                if img.mode != "RGB":
-                    img = img.convert("RGB")
-                images.append(img)
+            #перевод в сотые доли секунды
+            delay_centiseconds = max(1, self._delay_ms // 10)
 
-            if not images:
-                self.error.emit("Нет изображений")
-                return
+            temp_fd, temp_path = tempfile.mkstemp(suffix=".gif")
+            os.close(temp_fd)
 
-            temp_file = tempfile.NamedTemporaryFile(
-                suffix=".gif", delete=False, mode="wb"
-            )
-            temp_path = temp_file.name
-            temp_file.close()
-
-            images[0].save(
-                temp_path,
-                save_all=True,
-                append_images=images[1:],
-                duration=self._delay_ms,
-                loop=0 if self._loop else 1,
-                optimize=True,
+            settings = GifBuildSettings(
+                image_paths=self._image_paths,
+                palette_size=palette_size,
+                frame_delay_centiseconds=delay_centiseconds,
+                loop_forever=self._loop,
             )
 
-            self.finished.emit(temp_path)
+            #получаем байты GIF от пайплайна
+            gif_bytes = build_gif(settings, progress_callback=self._on_progress)
+
+            #записываем байты на диск через gif_writer
+            written_path = write_gif(gif_bytes, temp_path)
+
+            self.finished.emit(str(written_path))
 
         except Exception as e:
             self.error.emit(str(e))
+
+    def _on_progress(self, step: int, total: int, message: str) -> None:
+        self.progress.emit(step, total, message)
 
 
 class GifPreviewLabel(QLabel):
@@ -81,6 +90,22 @@ class GifPreviewLabel(QLabel):
         self.setProperty("class", "gif-preview")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._movie: Optional[QMovie] = None
+
+    def set_gif(self, gif_path: str) -> None:
+        if self._movie is not None:
+            self._movie.stop()
+
+        self._movie = QMovie(gif_path)
+        self._movie.setScaledSize(
+            self.size().scaled(
+                self.width() - 8,
+                self.height() - 8,
+                Qt.AspectRatioMode.KeepAspectRatio,
+            )
+        )
+        self.setMovie(self._movie)
+        self._movie.start()
 
     def mousePressEvent(self, event) -> None:
         self.clicked.emit()
@@ -95,11 +120,14 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self._gif_path: Optional[str] = None
+        self._worker: Optional[GifWorker] = None
         self._setup_ui()
         self._apply_pixel_theme()
         self.setWindowTitle("GIF Creator")
 
-        total_width = self.LEFT_COLUMN_WIDTH + self.GAP_WIDTH + self.RIGHT_COLUMN_WIDTH + 40  # margins
+        total_width = (
+            self.LEFT_COLUMN_WIDTH + self.GAP_WIDTH + self.RIGHT_COLUMN_WIDTH + 40
+        )
         self.setFixedSize(total_width, 750)
 
     def _setup_ui(self) -> None:
@@ -110,7 +138,6 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(12)
 
-        # Заголовок
         header = self._create_header()
         main_layout.addWidget(header)
 
@@ -191,6 +218,12 @@ class MainWindow(QMainWindow):
         self._create_btn.clicked.connect(self._on_create_gif)
         layout.addWidget(self._create_btn)
 
+        #статус прогресса для уведомления пользователя
+        self._status_label = QLabel("")
+        self._status_label.setProperty("class", "info-text")
+        self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._status_label)
+
         result_title = QLabel("[ РЕЗУЛЬТАТ ]")
         result_title.setProperty("class", "section-title")
         layout.addWidget(result_title)
@@ -223,10 +256,10 @@ class MainWindow(QMainWindow):
             image_paths = []
             for url in urls:
                 file_path = Path(url.toLocalFile())
-                if file_path.suffix.lower() in [
+                if file_path.suffix.lower() in {
                     ".png", ".jpg", ".jpeg", ".gif",
-                    ".bmp", ".webp", ".tiff", ".tif"
-                ]:
+                    ".bmp", ".webp", ".tiff", ".tif",
+                }:
                     image_paths.append(file_path)
             if image_paths:
                 self._frame_preview.set_frames(image_paths)
@@ -258,6 +291,7 @@ class MainWindow(QMainWindow):
 
         self._create_btn.setEnabled(False)
         self._create_btn.setText("[ ЖДИ... ]")
+        self._status_label.setText("[1/6] Подготовка...")
 
         delay_ms = self._settings_panel.get_delay_ms()
         quality = self._settings_panel.get_quality()
@@ -266,30 +300,30 @@ class MainWindow(QMainWindow):
         self._worker = GifWorker(image_paths, delay_ms, quality, loop)
         self._worker.finished.connect(self._on_gif_created)
         self._worker.error.connect(self._on_gif_error)
+        self._worker.progress.connect(self._on_progress)
         self._worker.start()
+
+    def _on_progress(self, step: int, total: int, message: str) -> None:
+        self._status_label.setText(f"[{step}/{total}] {message}")
 
     def _on_gif_created(self, gif_path: str) -> None:
         self._gif_path = gif_path
-        pixmap = QPixmap(gif_path)
-        scaled = pixmap.scaled(
-            self._gif_preview.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.FastTransformation
-        )
-        self._gif_preview.setPixmap(scaled)
+        self._status_label.setText("[ готово! ]")
+
+        self._gif_preview.set_gif(gif_path)
+
         self._download_btn.setEnabled(True)
         self._create_btn.setEnabled(True)
         self._create_btn.setText("[ СОЗДАТЬ GIF ]")
 
     def _on_gif_error(self, error_message: str) -> None:
+        self._status_label.setText("")
         QMessageBox.critical(self, "Ошибка", error_message)
         self._create_btn.setEnabled(True)
         self._create_btn.setText("[ СОЗДАТЬ GIF ]")
 
     def _on_gif_preview_clicked(self) -> None:
         if self._gif_path:
-            import subprocess
-            import sys
             if sys.platform == "darwin":
                 subprocess.call(["open", self._gif_path])
             elif sys.platform == "win32":
@@ -300,13 +334,22 @@ class MainWindow(QMainWindow):
     def _on_download_gif(self) -> None:
         if not self._gif_path:
             return
-        file_dialog = QFileDialog()
-        file_dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        file_dialog.setNameFilter("GIF Images (*.gif)")
-        file_dialog.setDefaultSuffix("gif")
-        if file_dialog.exec():
-            save_path = file_dialog.selectedFiles()[0]
-            if save_path:
-                import shutil
-                shutil.copy2(self._gif_path, save_path)
-                QMessageBox.information(self, "Готово", f"Сохранено:\n{save_path}")
+
+        save_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Сохранить GIF",
+            "",
+            "GIF Images (*.gif)",
+        )
+
+        if not save_path:
+            return
+
+        if not save_path.lower().endswith(".gif"):
+            save_path += ".gif"
+
+        try:
+            shutil.copy2(self._gif_path, save_path)
+            QMessageBox.information(self, "Готово", f"Сохранено:\n{save_path}")
+        except OSError as e:
+            QMessageBox.critical(self, "Ошибка сохранения", str(e))
