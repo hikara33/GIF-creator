@@ -1,22 +1,3 @@
-"""
-Модуль сборки готового бинарного GIF89a-файла из подготовленных данных:
-палитры, индексированных кадров (после quantize + dithering) и LZW-сжатых
-данных каждого кадра.
-
-Структура итогового файла:
-
-    Header (6 байт: "GIF89a")
-    Logical Screen Descriptor (7 байт)
-    Global Color Table (3 * N байт, N — размер палитры)
-    Application Extension (NETSCAPE2.0) — для зацикливания анимации
-    -- для каждого кадра --
-        Graphic Control Extension (задержка кадра, прозрачность)
-        Image Descriptor
-        Image Data (LZW min code size + сжатые данные блоками)
-    -- конец повторений --
-    Trailer (1 байт: 0x3B)
-"""
-
 from __future__ import annotations
 
 import struct
@@ -40,7 +21,7 @@ class GifFrame:
     width: int
     height: int
     indexed_pixels: list[int]
-    delay_centiseconds: int  # задержка кадра в сотых долях секунды
+    delay_centiseconds: int  #задержка кадра в сотых долях секунды
 
 
 def _palette_size_to_table_size_field(palette_size: int) -> int:
@@ -113,7 +94,7 @@ def _build_netscape_loop_extension(loop_count: int = 0) -> bytes:
 
 
 def _build_graphic_control_extension(delay_centiseconds: int) -> bytes:
-    packed_fields = (1 << 2)  # Disposal Method = 1
+    packed_fields = (1 << 2)
 
     block = bytearray()
     block += EXTENSION_INTRODUCER
@@ -121,7 +102,7 @@ def _build_graphic_control_extension(delay_centiseconds: int) -> bytes:
     block.append(4)  # размер блока данных
     block.append(packed_fields)
     block += struct.pack("<H", delay_centiseconds)
-    block.append(0)  # Transparent Color Index (не используется)
+    block.append(0)
     block.append(0)  # терминатор блока
 
     return bytes(block)
@@ -131,11 +112,11 @@ def _build_image_descriptor(width: int, height: int) -> bytes:
     return struct.pack(
         "<BHHHHB",
         ord(IMAGE_SEPARATOR),
-        0,  # Image Left Position
-        0,  # Image Top Position
+        0, # left
+        0, # top
         width,
         height,
-        0,  # Packed Fields — без локальной таблицы цветов
+        0,
     )
 
 
