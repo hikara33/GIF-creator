@@ -32,6 +32,53 @@ _QUALITY_TO_PALETTE_SIZE: dict[int, int] = {
 }
 
 
+class DropZoneWidget(QLabel):
+    """Специализированный виджет для Drag-and-Drop изображений."""
+    files_dropped = pyqtSignal(list)  # Сигнал для передачи списка путей
+    clicked = pyqtSignal()           # Сигнал для клика
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setProperty("class", "drop-zone")
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumHeight(120)
+        self.setText(
+            "+--------------------------+\n"
+            "|  ПЕРЕТАЩИ СЮДА ФОТО      |\n"
+            "|  или кликни для выбора   |\n"
+            "+--------------------------+"
+        )
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            image_paths = []
+            for url in urls:
+                file_path = Path(url.toLocalFile())
+                if file_path.suffix.lower() in {
+                    ".png", ".jpg", ".jpeg", ".gif",
+                    ".bmp", ".webp", ".tiff", ".tif",
+                }:
+                    image_paths.append(file_path)
+            if image_paths:
+                self.files_dropped.emit(image_paths)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def mousePressEvent(self, event) -> None:
+        self.clicked.emit()
+        super().mousePressEvent(event)
+
+
 class GifWorker(QThread):
     finished = pyqtSignal(str)
     error = pyqtSignal(str)
@@ -180,22 +227,10 @@ class MainWindow(QMainWindow):
 
         return panel
 
-    def _create_drop_zone(self) -> QWidget:
-        zone = QLabel()
-        zone.setText(
-            "+--------------------------+\n"
-            "|  ПЕРЕТАЩИ СЮДА ФОТО      |\n"
-            "|  или кликни для выбора   |\n"
-            "+--------------------------+"
-        )
-        zone.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        zone.setAcceptDrops(True)
-        zone.setMinimumHeight(120)
-        zone.setProperty("class", "drop-zone")
-        zone.setCursor(Qt.CursorShape.PointingHandCursor)
-        zone.mousePressEvent = lambda event: self._on_drop_zone_clicked()
-        zone.dragEnterEvent = lambda event: self._on_drag_enter(event)
-        zone.dropEvent = lambda event: self._on_drop(event)
+    def _create_drop_zone(self) -> DropZoneWidget:
+        zone = DropZoneWidget()
+        zone.files_dropped.connect(self._on_files_dropped)
+        zone.clicked.connect(self._on_drop_zone_clicked)
         return zone
 
     def _create_right_panel(self) -> QWidget:
@@ -246,24 +281,12 @@ class MainWindow(QMainWindow):
     def _apply_pixel_theme(self) -> None:
         self.setStyleSheet(PIXEL_THEME_STYLESHEET)
 
-    def _on_drag_enter(self, event: QDragEnterEvent) -> None:
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-
-    def _on_drop(self, event: QDropEvent) -> None:
-        if event.mimeData().hasUrls():
-            urls = event.mimeData().urls()
-            image_paths = []
-            for url in urls:
-                file_path = Path(url.toLocalFile())
-                if file_path.suffix.lower() in {
-                    ".png", ".jpg", ".jpeg", ".gif",
-                    ".bmp", ".webp", ".tiff", ".tif",
-                }:
-                    image_paths.append(file_path)
-            if image_paths:
-                self._frame_preview.set_frames(image_paths)
-                self._update_create_button_state()
+    def _on_files_dropped(self, image_paths: list[Path]) -> None:
+        """Обрабатывает файлы, перетащенные в зону DropZoneWidget."""
+        current = self._frame_preview.get_image_paths()
+        current.extend(image_paths)
+        self._frame_preview.set_frames(current)
+        self._update_create_button_state()
 
     def _on_drop_zone_clicked(self) -> None:
         file_dialog = QFileDialog()

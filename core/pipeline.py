@@ -25,7 +25,7 @@ class GifBuildSettings:
     frame_delay_centiseconds: int = 50  # 0.5 секунды по умолчанию
     per_frame_delays: list[int] | None = None
     loop_forever: bool = True
-    motion_blur: bool = True # ДОБАВИТЬ СЕТТИНГ В ГУИ
+    motion_blur: bool = False # ДОБАВИТЬ СЕТТИНГ В ГУИ
     motion_blur_strength: int = DEFAULT_MOTION_BLUR_STRENGTH
 
     def delay_for_frame(self, index: int) -> int:
@@ -58,11 +58,11 @@ def build_gif(
 
     #motion blur
     frames_2d = [image.pixels_2d for image in loaded_images]
-    if settings.motion_blur and len(frames_2d) > 1:
-        _report_progress(progress_callback, 2, total_steps, "Применение motion blur")
-        frames_2d = apply_motion_blur(frames_2d, strength=settings.motion_blur_strength)
-    else:
-        _report_progress(progress_callback, 2, total_steps, "Motion blur пропущен")
+    # if settings.motion_blur and len(frames_2d) > 1:
+    #     _report_progress(progress_callback, 2, total_steps, "Применение motion blur")
+    #     frames_2d = apply_motion_blur(frames_2d, strength=settings.motion_blur_strength)
+    # else:
+    #     _report_progress(progress_callback, 2, total_steps, "Motion blur пропущен")
 
     #построение единой палитры по всем кадрам
     _report_progress(progress_callback, 3, total_steps, "Построение цветовой палитры")
