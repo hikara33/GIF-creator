@@ -4,11 +4,14 @@ from PIL import Image, ImageDraw
 from core.median_cut import build_palette
 from core.floyd_steinberg import apply_dithering
 
+from utils.metrics import compare_quality
+
 TEST_DIR = Path(__file__).parent / "output"
 RESULT_DIR = Path(__file__).parent / "results"
 RESULT_DIR.mkdir(exist_ok=True)
 
-PALETTE_SIZES = [64, 256]  # Сравним малую палитру и большую
+# Сравниваем три размера, как вы и хотели в предыдущем вопросе
+PALETTE_SIZES = [64, 128, 256]
 
 
 def test_image(image_path: Path) -> None:
@@ -29,6 +32,9 @@ def test_image(image_path: Path) -> None:
 
         # 2. Квантизуем с дизерингом (твой алгоритм)
         indexed_2d = apply_dithering(pixels_2d, palette)
+
+        metrics = compare_quality(pixels_2d, indexed_2d, palette)
+        print(f"  palette={palette_size}: MSE={metrics['mse']:.2f}, PSNR={metrics['psnr']:.1f} дБ")
 
         # 3. Собираем результат обратно в картинку
         result = Image.new("RGB", orig.size)
@@ -53,17 +59,17 @@ def test_image(image_path: Path) -> None:
 
 
 def main() -> None:
-    images = sorted(TEST_DIR.glob("*.png"))
+    # Задаем имя конкретного файла
+    target_filename = "cherry-heart.jpg"
+    image_path = TEST_DIR / target_filename
 
-    if not images:
-        print(f"ОШИБКА: Нет картинок в папке {TEST_DIR}")
-        print("Сначала запусти генератор: python -m tests.generate_quant_tests")
+    # Проверяем, существует ли файл
+    if not image_path.exists():
+        print(f"ОШИБКА: Файл {target_filename} не найден в папке {TEST_DIR}")
         return
 
-    print(f"Найдено тестов: {len(images)}\n")
-
-    for img_path in images:
-        test_image(img_path)
+    print(f"Запуск теста для одной картинки:\n")
+    test_image(image_path)
 
     print(f"\n========================================")
     print(f"ВСЁ! Открой папку и смотри результаты:")
