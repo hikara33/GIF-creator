@@ -27,6 +27,7 @@ def read_image(path: str | Path) -> LoadedImage:
     if not image_path.exists():
         raise FileNotFoundError(f"Файл не найден: {image_path}")
 
+    #проверка формата
     if image_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
         supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
         raise ValueError(
@@ -36,9 +37,9 @@ def read_image(path: str | Path) -> LoadedImage:
 
     try:
         with Image.open(image_path) as pil_image:
-            rgb_image = pil_image.convert("RGB")
+            rgb_image = pil_image.convert("RGB") #обязательная конвертация
             width, height = rgb_image.size
-            raw_pixels = list(rgb_image.getdata())
+            raw_pixels = list(rgb_image.getdata()) #плосикй список пикселей
     except Exception as error:
         raise ValueError(f"Не удалось прочитать изображение '{image_path}': {error}") from error
 

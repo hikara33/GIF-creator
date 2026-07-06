@@ -25,7 +25,7 @@ class GifBuildSettings:
     frame_delay_centiseconds: int = 50  # 0.5 секунды по умолчанию
     per_frame_delays: list[int] | None = None
     loop_forever: bool = True
-    motion_blur: bool = False # ДОБАВИТЬ СЕТТИНГ В ГУИ
+    motion_blur: bool = False 
     motion_blur_strength: int = DEFAULT_MOTION_BLUR_STRENGTH
 
     def delay_for_frame(self, index: int) -> int:
@@ -50,28 +50,22 @@ def build_gif(
                 "с количеством изображений"
             )
 
-    total_steps = 6
+    total_steps = 5
 
     #чтение изображений
     _report_progress(progress_callback, 1, total_steps, "Чтение изображений")
     loaded_images = read_image_sequence(settings.image_paths)
 
-    #motion blur
     frames_2d = [image.pixels_2d for image in loaded_images]
-    # if settings.motion_blur and len(frames_2d) > 1:
-    #     _report_progress(progress_callback, 2, total_steps, "Применение motion blur")
-    #     frames_2d = apply_motion_blur(frames_2d, strength=settings.motion_blur_strength)
-    # else:
-    #     _report_progress(progress_callback, 2, total_steps, "Motion blur пропущен")
 
     #построение единой палитры по всем кадрам
-    _report_progress(progress_callback, 3, total_steps, "Построение цветовой палитры")
+    _report_progress(progress_callback, 2, total_steps, "Построение цветовой палитры")
     all_pixels = [pixel for frame in frames_2d for row in frame for pixel in row]
     palette = build_palette(all_pixels, palette_size=settings.palette_size)
     min_code_size = _calculate_min_code_size(len(palette))
 
     #квантизация и дизеринг каждого кадра
-    _report_progress(progress_callback, 4, total_steps, "Квантизация и дизеринг кадров")
+    _report_progress(progress_callback, 3, total_steps, "Квантизация и дизеринг кадров")
     indexed_frames: list[list[int]] = []
     for frame in frames_2d:
         indexed_2d = apply_dithering(frame, palette)
@@ -79,13 +73,13 @@ def build_gif(
         indexed_frames.append(indexed_flat)
 
     #LZW-сжатие каждого кадра
-    _report_progress(progress_callback, 5, total_steps, "Сжатие данных алгоритмом LZW")
+    _report_progress(progress_callback, 4, total_steps, "Сжатие данных алгоритмом LZW")
     compressed_frames = [
         compress(indices, palette_size=len(palette)) for indices in indexed_frames
     ]
 
     #сборка итогового GIF-файла
-    _report_progress(progress_callback, 6, total_steps, "Сборка GIF-файла")
+    _report_progress(progress_callback, 5, total_steps, "Сборка GIF-файла")
     gif_frames = [
         GifFrame(
             width=loaded_images[i].width,

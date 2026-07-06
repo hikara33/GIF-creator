@@ -44,11 +44,12 @@ def _pad_palette(palette: list[RGBColor]) -> list[RGBColor]:
     padded.extend([(0, 0, 0)] * (padded_size - len(palette)))
     return padded
 
-
+#1
 def _build_header() -> bytes:
     return GIF_HEADER
 
 
+#2
 def _build_logical_screen_descriptor(
     width: int, height: int, palette_size: int
 ) -> bytes:
@@ -61,16 +62,10 @@ def _build_logical_screen_descriptor(
         | table_size_field  # Size of Global Color Table
     )
 
-    return struct.pack(
-        "<HHBBB",
-        width,
-        height,
-        packed_fields,
-        0,
-        0,
-    )
+    return struct.pack("<HHBBB", width, height, packed_fields, 0, 0,)
 
 
+#3
 def _build_global_color_table(palette: list[RGBColor]) -> bytes:
     padded_palette = _pad_palette(palette)
     table = bytearray()
@@ -79,6 +74,7 @@ def _build_global_color_table(palette: list[RGBColor]) -> bytes:
     return bytes(table)
 
 
+#4
 def _build_netscape_loop_extension(loop_count: int = 0) -> bytes:
     extension = bytearray()
     extension += EXTENSION_INTRODUCER
@@ -93,6 +89,7 @@ def _build_netscape_loop_extension(loop_count: int = 0) -> bytes:
     return bytes(extension)
 
 
+#5
 def _build_graphic_control_extension(delay_centiseconds: int) -> bytes:
     packed_fields = (1 << 2)
 
@@ -108,6 +105,7 @@ def _build_graphic_control_extension(delay_centiseconds: int) -> bytes:
     return bytes(block)
 
 
+#6
 def _build_image_descriptor(width: int, height: int) -> bytes:
     return struct.pack(
         "<BHHHHB",
@@ -120,6 +118,7 @@ def _build_image_descriptor(width: int, height: int) -> bytes:
     )
 
 
+#разбиение на чанки
 def _split_into_sub_blocks(data: bytes) -> bytes:
     result = bytearray()
     offset = 0
@@ -134,6 +133,7 @@ def _split_into_sub_blocks(data: bytes) -> bytes:
     return bytes(result)
 
 
+#7
 def _build_image_data_block(lzw_compressed: bytes, min_code_size: int) -> bytes:
     block = bytearray()
     block.append(min_code_size)

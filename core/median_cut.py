@@ -29,12 +29,8 @@ WeightedColor = tuple[RGBColor, int]  # (цвет, количество вхож
 @dataclass
 class ColorBucket:
     """
-    Сегмент цветового пространства — группа цветов, которые
-    в текущей итерации алгоритма считаются "похожими".
-
-    Хранит цвета вместе с весами (частотой встречаемости),
-    что необходимо для взвешенного среднего при финальном
-    вычислении представительного цвета палитры.
+    cегмент цветового пространства — группа цветов, которые
+    в текущей итерации алгоритма считаются похожими
     """
     colors: list[WeightedColor]
 
@@ -44,20 +40,21 @@ class ColorBucket:
     def total_weight(self) -> int:
         return sum(weight for _, weight in self.colors)
 
+    #разброс значений по одному каналу
     def channel_range(self, channel: Channel) -> int:
         values = [color[channel] for color, _ in self.colors]
         return max(values) - min(values)
 
+    #ищем канал с этим же разбросом
     def widest_channel(self) -> Channel:
         ranges = {channel: self.channel_range(channel) for channel in Channel}
         return max(ranges, key=ranges.get)
 
     def split(self) -> tuple["ColorBucket", "ColorBucket"]:
         """
-        Делит сегмент пополам по медиане самого широкого канала.
-
-        Сортировка идёт по значению канала, после чего список
-        делится на две равные (по количеству уникальных цветов) части.
+        делит сегмент пополам по медиане самого широкого канала
+        сортировка идёт по значению канала, после чего список
+        делится на две равные (по количеству уникальных цветов) части
         """
         channel = self.widest_channel()
         sorted_colors = sorted(self.colors, key=lambda item: item[0][channel])
@@ -70,9 +67,9 @@ class ColorBucket:
 
     def weighted_average_color(self) -> RGBColor:
         """
-        Каждый цвет учитывается пропорционально частоте его появления
+        каждый цвет учитывается пропорционально частоте его появления
         на изображении, поэтому доминирующие цвета сильнее влияют
-        на итоговый цвет палитры, а редкие — лишь немного его корректируют.
+        на итоговый цвет палитры, а редкие лишь немного его корректируют.
         """
         total_weight = self.total_weight()
         if total_weight == 0:
@@ -123,11 +120,11 @@ def build_palette(pixels: list[RGBColor], palette_size: int = 256) -> list[RGBCo
 
 def find_nearest_color_index(color: RGBColor, palette: list[RGBColor]) -> int:
     """
-    Находит индекс ближайшего цвета в палитре по евклидову расстоянию.
+    находит индекс ближайшего цвета в палитре по евклидову расстоянию
 
-    Используется для индексирования пикселей после построения палитры,
-    а также после рассеивания ошибки (Floyd-Steinberg), когда цвет
-    пикселя уже не обязательно совпадает ни с одним цветом палитры.
+    используется для индексирования пикселей после построения палитры,
+    а также после рассеивания ошибки, когда цвет
+    пикселя уже не обязательно совпадает ни с одним цветом палитры
     """
     best_index = 0
     best_distance = float("inf")
