@@ -1,0 +1,129 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build-windows:
+    name: Build FrameForge for Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: latest
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Build with PyInstaller
+        run: uv run pyinstaller gif_creator.spec
+
+      - name: Rename artifact
+        shell: pwsh
+        run: |
+          Move-Item `
+            -Path "dist/FrameForge.exe" `
+            -Destination "dist/FrameForge-Windows.exe"
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FrameForge-Windows
+          path: dist/FrameForge-Windows.exe
+
+  build-linux:
+    name: Build FrameForge for Linux
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: latest
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libglib2.0-0 \
+            libgl1-mesa-glx \
+            libegl1-mesa \
+            libxkbcommon-x11-0 \
+            libdbus-1-3
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Build with PyInstaller
+        run: uv run pyinstaller gif_creator.spec
+
+      - name: Rename artifact
+        run: |
+          mv "dist/FrameForge" "dist/FrameForge-Linux"
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FrameForge-Linux
+          path: dist/FrameForge-Linux
+
+  create-release:
+    name: Create FrameForge Release
+    runs-on: ubuntu-latest
+
+    needs:
+      - build-windows
+      - build-linux
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: FrameForge ${{ github.ref_name }}
+
+          body: |
+            ## FrameForge ${{ github.ref_name }}
+
+            Download FrameForge for your operating system:
+
+            | Platform | File |
+            |----------|------|
+            | Windows | `FrameForge-Windows.exe` |
+            | Linux | `FrameForge-Linux` |
+
+            ### What's new
+
+            <!-- Describe changes here -->
+
+          files: |
+            artifacts/FrameForge-Windows/FrameForge-Windows.exe
+            artifacts/FrameForge-Linux/FrameForge-Linux
+
+          draft: true
+          prerelease: false

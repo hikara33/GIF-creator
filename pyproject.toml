@@ -1,11 +1,25 @@
 [project]
-name = "gif-creator"
+name = "frameforge"
 version = "0.1.0"
-description = "GIF animation creator"
+description = "Video and GIF processing tool"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "numba>=0.67.0",
+    "numpy>=2.5.2",
     "pillow>=12.2.0",
     "pyqt6>=6.11.0",
     "pyqt6-sip>=13.11.1",
+    "scipy>=1.18.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.22.0",
+    "pytest>=9.1.1",
+    "ruff>=0.16.2",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
