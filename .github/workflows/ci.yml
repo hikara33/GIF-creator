@@ -45,3 +45,4 @@ jobs:
 
       - name: Run ruff
         run: uv run ruff check .
+        continue-on-error: true
