@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from core.median_cut import RGBColor, find_nearest_color_index
 
+_HAS_NUMBA = False
+
 #шаблон распределения ошибки
 _ERROR_DIFFUSION_PATTERN: tuple[tuple[int, int, float], ...] = (
     (1, 0, 7 / 16), # сосед справа
