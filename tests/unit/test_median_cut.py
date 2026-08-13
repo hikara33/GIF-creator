@@ -1,25 +1,36 @@
 import pytest
 
-from core.median_cut import build_palette, find_nearest_color_index
+from core.median_cut import (
+    build_palette,
+    find_nearest_color_index,
+    find_nearest_palette_indices,
+)
+
 
 def make_gradient_pixels(width=50, height=50):
     pixels = []
+
     for y in range(height):
         for x in range(width):
             r = int(x / width * 255)
             g = int(y / height * 255)
             b = 128
+
             pixels.append((r, g, b))
+
     return pixels
+
 
 def make_two_color_pixels():
     return [(255, 0, 0)] * 500 + [(0, 0, 255)] * 500
+
 
 def make_single_color_pixels():
     return [(100, 150, 200)] * 100
 
 
 class TestBuildPalette:
+
     @pytest.mark.parametrize(
         "size",
         [8, 16, 64, 128, 256],
@@ -203,3 +214,171 @@ class TestFindNearestColorIndex:
             (255, 255, 255),
             palette,
         ) == 0
+
+
+class TestFindNearestPaletteIndices:
+
+    def test_empty_pixels_returns_empty_list(self):
+        palette = [
+            (255, 0, 0),
+            (0, 255, 0),
+            (0, 0, 255),
+        ]
+
+        assert find_nearest_palette_indices(
+            [],
+            palette,
+        ) == []
+
+    def test_exact_matches(self):
+        palette = [
+            (255, 0, 0),
+            (0, 255, 0),
+            (0, 0, 255),
+        ]
+
+        pixels = [
+            (255, 0, 0),
+            (0, 255, 0),
+            (0, 0, 255),
+        ]
+
+        result = find_nearest_palette_indices(
+            pixels,
+            palette,
+        )
+
+        assert result == [0, 1, 2]
+
+    def test_nearest_colors(self):
+        palette = [
+            (0, 0, 0),
+            (255, 255, 255),
+        ]
+
+        pixels = [
+            (10, 10, 10),
+            (240, 240, 240),
+        ]
+
+        result = find_nearest_palette_indices(
+            pixels,
+            palette,
+        )
+
+        assert result == [0, 1]
+
+    def test_returns_one_index_per_pixel(self):
+        palette = [
+            (255, 0, 0),
+            (0, 255, 0),
+            (0, 0, 255),
+        ]
+
+        pixels = [
+            (10, 20, 30),
+            (100, 100, 100),
+            (200, 100, 50),
+            (20, 200, 100),
+            (50, 50, 200),
+        ]
+
+        result = find_nearest_palette_indices(
+            pixels,
+            palette,
+        )
+
+        assert len(result) == len(pixels)
+
+    def test_all_indices_are_valid(self):
+        palette = [
+            (255, 0, 0),
+            (0, 255, 0),
+            (0, 0, 255),
+        ]
+
+        pixels = [
+            (10, 20, 30),
+            (100, 100, 100),
+            (200, 100, 50),
+            (20, 200, 100),
+        ]
+
+        result = find_nearest_palette_indices(
+            pixels,
+            palette,
+        )
+
+        assert all(
+            0 <= index < len(palette)
+            for index in result
+        )
+
+    def test_single_color_palette_always_returns_zero(self):
+        palette = [(100, 150, 200)]
+
+        pixels = [
+            (0, 0, 0),
+            (50, 100, 150),
+            (255, 255, 255),
+        ]
+
+        result = find_nearest_palette_indices(
+            pixels,
+            palette,
+        )
+
+        assert result == [0, 0, 0]
+
+    def test_chunked_result_matches_single_pixel_implementation(self):
+        palette = [
+            (0, 0, 0),
+            (255, 0, 0),
+            (0, 255, 0),
+            (0, 0, 255),
+            (255, 255, 255),
+        ]
+
+        pixels = [
+            (10, 20, 30),
+            (240, 10, 10),
+            (10, 240, 10),
+            (10, 10, 240),
+            (200, 200, 200),
+            (120, 120, 120),
+        ]
+
+        batch_result = find_nearest_palette_indices(
+            pixels,
+            palette,
+            chunk_size=2,
+        )
+
+        single_result = [
+            find_nearest_color_index(pixel, palette)
+            for pixel in pixels
+        ]
+
+        assert batch_result == single_result
+
+    def test_small_chunk_size(self):
+        palette = [
+            (0, 0, 0),
+            (255, 255, 255),
+        ]
+
+        pixels = [
+            (10, 10, 10),
+            (240, 240, 240),
+            (20, 20, 20),
+            (230, 230, 230),
+            (30, 30, 30),
+        ]
+
+        result = find_nearest_palette_indices(
+            pixels,
+            palette,
+            chunk_size=1,
+        )
+
+        assert result == [0, 1, 0, 1, 0]
