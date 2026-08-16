@@ -1,90 +1,117 @@
-"""
-Модуль рассеивания ошибки квантизации методом Флойда-Стейнберга.
-Алгоритм Флойда-Стейнберга распределяет эту ошибку на ещё не
-обработанные соседние пиксели по фиксированному шаблону весов:
-
-                X    7/16
-         3/16  5/16  1/16
-"""
-
 from __future__ import annotations
 
-from core.median_cut import RGBColor, find_nearest_color_index
+import numpy as np
 
-_HAS_NUMBA = False
+from core.median_cut import RGBColor
 
-#шаблон распределения ошибки
-_ERROR_DIFFUSION_PATTERN: tuple[tuple[int, int, float], ...] = (
-    (1, 0, 7 / 16), # сосед справа
-    (-1, 1, 3 / 16), # сосед снизу слева
-    (0, 1, 5 / 16), # сосед сниза
-    (1, 1, 1 / 16), # сосед сниза справа
-)
+try:
+    from numba import njit as _njit
+
+    @_njit
+    def _dither_numba(
+        buffer: np.ndarray,
+        palette_np: np.ndarray,
+        result: np.ndarray,
+        height: int,
+        width: int,
+    ) -> None:
+        for y in range(height):
+            for x in range(width):
+                r = max(0.0, min(255.0, buffer[y, x, 0]))
+                g = max(0.0, min(255.0, buffer[y, x, 1]))
+                b = max(0.0, min(255.0, buffer[y, x, 2]))
+
+                best_idx = 0
+                best_dist = 1e18
+                for i in range(len(palette_np)):
+                    dr = r - palette_np[i, 0]
+                    dg = g - palette_np[i, 1]
+                    db = b - palette_np[i, 2]
+                    d = dr * dr + dg * dg + db * db
+                    if d < best_dist:
+                        best_dist = d
+                        best_idx = i
+                result[y, x] = best_idx
+
+                er = r - palette_np[best_idx, 0]
+                eg = g - palette_np[best_idx, 1]
+                eb = b - palette_np[best_idx, 2]
+
+                if x + 1 < width:
+                    buffer[y, x + 1, 0] += er * 0.4375   # 7/16
+                    buffer[y, x + 1, 1] += eg * 0.4375
+                    buffer[y, x + 1, 2] += eb * 0.4375
+                if y + 1 < height:
+                    if x > 0:
+                        buffer[y + 1, x - 1, 0] += er * 0.1875  # 3/16
+                        buffer[y + 1, x - 1, 1] += eg * 0.1875
+                        buffer[y + 1, x - 1, 2] += eb * 0.1875
+                    buffer[y + 1, x, 0] += er * 0.3125   # 5/16
+                    buffer[y + 1, x, 1] += eg * 0.3125
+                    buffer[y + 1, x, 2] += eb * 0.3125
+                    if x + 1 < width:
+                        buffer[y + 1, x + 1, 0] += er * 0.0625  # 1/16
+                        buffer[y + 1, x + 1, 1] += eg * 0.0625
+                        buffer[y + 1, x + 1, 2] += eb * 0.0625
+
+    _warmup_buf = np.ones((4, 4, 3), dtype=np.float32) * 128
+    _warmup_pal = np.zeros((4, 3), dtype=np.float32)
+    _warmup_res = np.empty((4, 4), dtype=np.int32)
+    _dither_numba(_warmup_buf, _warmup_pal, _warmup_res, 4, 4)
+    del _warmup_buf, _warmup_pal, _warmup_res
+ 
+    _HAS_NUMBA = True
+
+except ImportError:
+    _HAS_NUMBA = False
 
 
-def _clamp(value: float) -> int:
-    return max(0, min(255, round(value)))
-
-#разница между исходным и новым цветом
-def _subtract_colors(a: RGBColor, b: RGBColor) -> tuple[float, float, float]:
-    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
-
-
-def _add_error(color: RGBColor, error: tuple[float, float, float], share: float) -> RGBColor:
-    return (
-        _clamp(color[0] + error[0] * share),
-        _clamp(color[1] + error[1] * share),
-        _clamp(color[2] + error[2] * share),
-    )
+def _dither_numpy(
+        buffer: np.ndarray,
+        palette_np: np.ndarray,
+        result: np.ndarray,
+        height: int,
+        width: int,
+) -> None:
+    for y in range(height):
+        for x in range(width):
+            pixel = np.clip(buffer[y, x], 0.0, 255.0)
+ 
+            diff = pixel - palette_np                         
+            nearest_idx = int(
+                np.argmin(np.einsum("ij,ij->i", diff, diff))  
+            )
+            result[y, x] = nearest_idx
+ 
+            error = pixel - palette_np[nearest_idx]          
+ 
+            if x + 1 < width:
+                buffer[y, x + 1] += error * 0.4375
+            if y + 1 < height:
+                if x > 0:
+                    buffer[y + 1, x - 1] += error * 0.1875
+                buffer[y + 1, x] += error * 0.3125
+                if x + 1 < width:
+                    buffer[y + 1, x + 1] += error * 0.0625
 
 
 def apply_dithering(
-    pixels: list[list[RGBColor]],
+    pixels_2d: list[list[RGBColor]],
     palette: list[RGBColor],
 ) -> list[list[int]]:
-    """
-    квантизирует изображение с рассеиванием ошибки по Флойду-Стейнбергу
-
-    в отличие от простого индексирования (когда каждый пиксель
-    независимо заменяется ближайшим цветом палитры), здесь ошибка
-    округления накапливается и переносится на соседние пиксели,
-    благодаря чему итоговое изображение визуально ближе к оригиналу
-    """
-    if not pixels or not pixels[0]:
+    if not pixels_2d or not pixels_2d[0]:
         raise ValueError("Передано пустое изображение")
-
-    height = len(pixels)
-    width = len(pixels[0])
-
-    working_buffer: list[list[RGBColor]] = [row[:] for row in pixels] #копия пикселей
-    indexed_result: list[list[int]] = [[0] * width for _ in range(height)]
-
-    for y in range(height):
-        for x in range(width):
-            original_color = working_buffer[y][x]
-            nearest_index = find_nearest_color_index(original_color, palette)
-            palette_color = palette[nearest_index]
-
-            indexed_result[y][x] = nearest_index
-
-            error = _subtract_colors(original_color, palette_color)
-            _distribute_error(working_buffer, x, y, width, height, error)
-
-    return indexed_result
-
-
-def _distribute_error(
-    buffer: list[list[RGBColor]],
-    x: int,
-    y: int,
-    width: int,
-    height: int,
-    error: tuple[float, float, float],
-) -> None:
-    for dx, dy, share in _ERROR_DIFFUSION_PATTERN:
-        neighbor_x, neighbor_y = x + dx, y + dy
-
-        if 0 <= neighbor_x < width and 0 <= neighbor_y < height: #чтоб не выйти за пределы картинки
-            buffer[neighbor_y][neighbor_x] = _add_error(
-                buffer[neighbor_y][neighbor_x], error, share
-            )
+ 
+    height = len(pixels_2d)
+    width = len(pixels_2d[0])
+ 
+    buffer = np.array(pixels_2d, dtype=np.float32)   # (H, W, 3)
+    palette_np = np.array(palette, dtype=np.float32)  # (M, 3)
+    result = np.empty((height, width), dtype=np.int32)
+ 
+    if _HAS_NUMBA:
+        _dither_numba(buffer, palette_np, result, height, width)
+    else:
+        _dither_numpy(buffer, palette_np, result, height, width)
+ 
+    return result.tolist()
