@@ -1,6 +1,7 @@
 from PIL import Image
 
 from core.pipeline import GifBuildSettings, build_gif
+from io_module.image_reader import read_image
 
 
 def create_test_frame(path, color, size=(10, 10)):
@@ -124,3 +125,38 @@ class TestPipeline:
         )
 
         assert output_path.exists()
+
+
+    def test_pipeline_with_preloaded_frames_matches_image_paths(self, tmp_path):
+        frame_paths = []
+        for i, color in enumerate([
+            (255, 0, 0),
+            (0, 255, 0),
+            (0, 0, 255),
+        ]):
+            path = tmp_path / f"frame_{i}.png"
+            create_test_frame(path, color, size=(24, 24))
+            frame_paths.append(path)
+
+        loaded = [read_image(path) for path in frame_paths]
+
+        from_paths = build_gif(
+            GifBuildSettings(
+                output_path=tmp_path / "from_paths.gif",
+                image_paths=frame_paths,
+                palette_size=64,
+                frame_delay_centiseconds=50,
+            )
+        )
+
+        from_preloaded = build_gif(
+            GifBuildSettings(
+                output_path=tmp_path / "from_preloaded.gif",
+                preloaded_frames=loaded,
+                palette_size=64,
+                frame_delay_centiseconds=50,
+            )
+        )
+
+        assert from_preloaded[:6] == b"GIF89a"
+        assert from_preloaded == from_paths
