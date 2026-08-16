@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from core.floyd_steinberg import apply_dithering
 from core.gif_encoder import GifFrame, encode_gif
 from core.lzw import _calculate_min_code_size, compress
 from core.median_cut import build_palette
-from core.motion_blur import apply_motion_blur
 from io_module.image_reader import read_image_sequence
 
 DEFAULT_PALETTE_SIZE = 256
@@ -43,12 +42,14 @@ def build_gif(
     settings: GifBuildSettings,
     progress_callback: ProgressCallback | None = None,
 ) -> bytes:
-    if settings.per_frame_delays is not None:
-        if len(settings.per_frame_delays) != len(settings.image_paths):
-            raise ValueError(
-                "Количество значений per_frame_delays должно совпадать "
-                "с количеством изображений"
-            )
+    if (
+        settings.per_frame_delays is not None
+        and len(settings.per_frame_delays) != len(settings.image_paths)
+    ):
+        raise ValueError(
+            "Количество значений per_frame_delays должно совпадать "
+            "с количеством изображений"
+        )
 
     total_steps = 5
 

@@ -1,19 +1,9 @@
-"""
-Модуль квантизации цветов методом медианного сечения (Median Cut).
-
-Алгоритм строит палитру из заданного количества цветов на основе
-анализа цветового распределения изображения. Реализованы два улучшения:
-
-1. Взвешенное среднее при вычислении цвета сегмента — учитывается
-   частота встречаемости каждого цвета, а не только уникальность.
-2. Рекурсивное разбиение по каналу с максимальным диапазоном значений.
-"""
-
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import dataclass
 from enum import IntEnum
+
+import numpy as np
 
 
 class Channel(IntEnum):
@@ -28,68 +18,53 @@ WeightedColor = tuple[RGBColor, int]  # (цвет, количество вхож
 
 @dataclass
 class ColorBucket:
-    """
-    cегмент цветового пространства — группа цветов, которые
-    в текущей итерации алгоритма считаются похожими
-    """
-    colors: list[WeightedColor]
+
+    def __init__(self, colors: np.ndarray, weights: np.ndarray) -> None:
+        self.colors = colors
+        self.weights = weights
 
     def __len__(self) -> int:
         return len(self.colors)
 
     def total_weight(self) -> int:
-        return sum(weight for _, weight in self.colors)
-
-    #разброс значений по одному каналу
-    def channel_range(self, channel: Channel) -> int:
-        values = [color[channel] for color, _ in self.colors]
-        return max(values) - min(values)
+        return int(self.weights.sum())
 
     #ищем канал с этим же разбросом
     def widest_channel(self) -> Channel:
-        ranges = {channel: self.channel_range(channel) for channel in Channel}
-        return max(ranges, key=ranges.get)
+        ranges = self.colors.max(axis=0) - self.colors.min(axis=0)
+        return int(ranges.argmax())
 
-    def split(self) -> tuple["ColorBucket", "ColorBucket"]:
-        """
-        делит сегмент пополам по медиане самого широкого канала
-        сортировка идёт по значению канала, после чего список
-        делится на две равные (по количеству уникальных цветов) части
-        """
-        channel = self.widest_channel()
-        sorted_colors = sorted(self.colors, key=lambda item: item[0][channel])
+        
+    def split(self) -> tuple[ColorBucket, ColorBucket]:
+        ch = self.widest_channel()
+        idx = np.argsort(self.colors[:, ch], kind="stable")
+        c = self.colors[idx]
+        w = self.weights[idx]
+        mid = len(c) // 2
 
-        mid = len(sorted_colors) // 2
         return (
-            ColorBucket(sorted_colors[:mid]),
-            ColorBucket(sorted_colors[mid:]),
+            ColorBucket(c[:mid].copy(), w[:mid].copy()),
+            ColorBucket(c[mid:].copy(), w[mid:].copy()),
         )
 
     def weighted_average_color(self) -> RGBColor:
-        """
-        каждый цвет учитывается пропорционально частоте его появления
-        на изображении, поэтому доминирующие цвета сильнее влияют
-        на итоговый цвет палитры, а редкие лишь немного его корректируют.
-        """
-        total_weight = self.total_weight()
-        if total_weight == 0:
-            return (0, 0, 0)
-
-        sums = [0, 0, 0]
-        for color, weight in self.colors:
-            for channel in Channel:
-                sums[channel] += color[channel] * weight
-
-        return (
-            round(sums[Channel.RED] / total_weight),
-            round(sums[Channel.GREEN] / total_weight),
-            round(sums[Channel.BLUE] / total_weight),
-        )
+        avg = np.average(self.colors, axis=0, weights=self.weights)
+        return (int(round(avg[0])), int(round(avg[1])), int(round(avg[2])))
 
 
-def _count_unique_colors(pixels: list[RGBColor]) -> list[WeightedColor]:
-    counter = Counter(pixels)
-    return list(counter.items())
+def _pixels_to_unique_numpy(pixels: list[RGBColor]) -> tuple[np.ndarray, np.ndarray]:
+    arr    = np.array(pixels, dtype=np.uint32)                        
+    packed = (arr[:, 0] << 16) | (arr[:, 1] << 8) | arr[:, 2]       
+ 
+    unique_packed, counts = np.unique(packed, return_counts=True)
+ 
+    colors = np.stack([
+        (unique_packed >> 16).astype(np.float32),
+        ((unique_packed >> 8) & 0xFF).astype(np.float32),
+        (unique_packed & 0xFF).astype(np.float32),
+    ], axis=1)
+ 
+    return colors, counts.astype(np.float32)
 
 
 def build_palette(pixels: list[RGBColor], palette_size: int = 256) -> list[RGBColor]:
@@ -99,12 +74,12 @@ def build_palette(pixels: list[RGBColor], palette_size: int = 256) -> list[RGBCo
     if palette_size < 1:
         raise ValueError("Размер палитры должен быть положительным числом")
 
-    weighted_colors = _count_unique_colors(pixels)
-    initial_bucket = ColorBucket(weighted_colors)
+    colors, weights = _pixels_to_unique_numpy(pixels)
+    target_size = min(palette_size, len(colors))
 
-    buckets = [initial_bucket]
+    buckets = [ColorBucket(colors, weights)]
 
-    while len(buckets) < palette_size:
+    while len(buckets) < target_size:
         splittable = [b for b in buckets if len(b) > 1]
         if not splittable:
             break
@@ -115,27 +90,35 @@ def build_palette(pixels: list[RGBColor], palette_size: int = 256) -> list[RGBCo
         left, right = bucket_to_split.split()
         buckets.extend([left, right])
 
-    return [bucket.weighted_average_color() for bucket in buckets]
-
+    return [b.weighted_average_color() for b in buckets]
 
 def find_nearest_color_index(color: RGBColor, palette: list[RGBColor]) -> int:
-    """
-    находит индекс ближайшего цвета в палитре по евклидову расстоянию
+    pixel      = np.array(color,   dtype=np.float32)
+    palette_np = np.array(palette, dtype=np.float32)
+    diff       = pixel - palette_np
+    return int(np.argmin(np.einsum("ij,ij->i", diff, diff)))
 
-    используется для индексирования пикселей после построения палитры,
-    а также после рассеивания ошибки, когда цвет
-    пикселя уже не обязательно совпадает ни с одним цветом палитры
-    """
-    best_index = 0
-    best_distance = float("inf")
 
-    for index, palette_color in enumerate(palette):
-        distance = sum(
-            (color[channel] - palette_color[channel]) ** 2
-            for channel in Channel
-        )
-        if distance < best_distance:
-            best_distance = distance
-            best_index = index
-
-    return best_index
+def find_nearest_palette_indices(
+    pixels_flat: list[RGBColor],
+    palette: list[RGBColor],
+    chunk_size: int = 8192,
+) -> list[int]:
+    if not pixels_flat:
+        return []
+ 
+    px  = np.array(pixels_flat, dtype=np.float32)
+    pal = np.array(palette,     dtype=np.float32)   
+ 
+    pal_norms = np.einsum("mi,mi->m", pal, pal)   
+ 
+    result = np.empty(len(px), dtype=np.int32)
+ 
+    for start in range(0, len(px), chunk_size):
+        chunk = px[start : start + chunk_size]                     
+        px_norms = np.einsum("ni,ni->n", chunk, chunk)[:, None]    
+        dot      = chunk @ pal.T                                    
+        distances = px_norms - 2.0 * dot + pal_norms             
+        result[start : start + chunk_size] = np.argmin(distances, axis=1)
+ 
+    return result.tolist()

@@ -1,9 +1,8 @@
 import pytest
 
-from core.floyd_steinberg import apply_dithering
-from core.floyd_steinberg import _HAS_NUMBA
-
+from core.floyd_steinberg import _HAS_NUMBA, apply_dithering
 from core.median_cut import build_palette
+
 
 class TestFloydSteinberg:
     def test_output_dimensions_match_input(self, random_image):
@@ -53,10 +52,11 @@ class TestFloydSteinberg:
         if not _HAS_NUMBA:
             pytest.skip("numba не установлена")
 
-        import numpy as np
-        from core.floyd_steinberg import _dither_numpy
-
         import random
+
+        import numpy as np
+
+        from core.floyd_steinberg import _dither_numpy
         random.seed(7)
         W, H = 15, 15
         pixels_flat = [(random.randint(0,255), random.randint(0,255), random.randint(0,255))
