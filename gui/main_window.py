@@ -1,15 +1,12 @@
-import shutil
-import subprocess
-import sys
-import tempfile
-import os
-from pathlib import Path
-from typing import Optional
+from __future__ import annotations
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QMovie
+import shutil
+
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import (
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -19,360 +16,407 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from core.pipeline import GifBuildSettings, build_gif
-from io_module.gif_writer import write_gif  # <-- Добавлен импорт
-from gui.preview_widget import FramePreviewWidget
-from gui.resources.pixel_theme import PIXEL_THEME_STYLESHEET
-from gui.settings_panel import SettingsPanel
+from gui.icons import icon
+from gui.resources.palette import (
+    GLOBAL_PADDING,
+    PRIMARY,
+    SIDEBAR_WIDTH,
+    SPACING,
+)
+from gui.resources.theme import THEME_STYLESHEET
+from gui.types import MediaKind, UploadedMedia
+from gui.video_editor import VideoEditorDialog
+from gui.widgets.bottom_bar import BottomBar
+from gui.widgets.frame_strip import FrameStrip
+from gui.widgets.parameter_panel import ParameterPanel
+from gui.widgets.preview_view import PreviewView
+from gui.widgets.upload_zone import UploadZone
+from gui.worker import GifBuildWorker, image_sequence_task, video_task
 
-_QUALITY_TO_PALETTE_SIZE: dict[int, int] = {
-    50: 64,
-    75: 128,
-    95: 256,
-}
+_GIF_FILTER = "GIF Images (*.gif)"
+_DEFAULT_HINT = "Перетащите сюда фото или видео"
 
-
-class DropZoneWidget(QLabel):
-    """Специализированный виджет для Drag-and-Drop изображений."""
-    files_dropped = pyqtSignal(list)  # Сигнал для передачи списка путей
-    clicked = pyqtSignal()           # Сигнал для клика
-
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setAcceptDrops(True)
-        self.setProperty("class", "drop-zone")
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(120)
-        self.setText(
-            "+--------------------------+\n"
-            "|  ПЕРЕТАЩИ СЮДА ФОТО      |\n"
-            "|  или кликни для выбора   |\n"
-            "+--------------------------+"
-        )
-
-    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def dropEvent(self, event: QDropEvent) -> None:
-        if event.mimeData().hasUrls():
-            urls = event.mimeData().urls()
-            image_paths = []
-            for url in urls:
-                file_path = Path(url.toLocalFile())
-                if file_path.suffix.lower() in {
-                    ".png", ".jpg", ".jpeg", ".gif",
-                    ".bmp", ".webp", ".tiff", ".tif",
-                }:
-                    image_paths.append(file_path)
-            if image_paths:
-                self.files_dropped.emit(image_paths)
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def mousePressEvent(self, event) -> None:
-        self.clicked.emit()
-        super().mousePressEvent(event)
-
-
-class GifWorker(QThread):
-    finished = pyqtSignal(str)
-    error = pyqtSignal(str)
-    progress = pyqtSignal(int, int, str)  # step, total, message
-
-    def __init__(
-        self,
-        image_paths: list[Path],
-        delay_ms: int,
-        quality: int,
-        loop: bool,
-    ) -> None:
-        super().__init__()
-        self._image_paths = image_paths
-        self._delay_ms = delay_ms
-        self._quality = quality
-        self._loop = loop
-
-    def run(self) -> None:
-        try:
-            palette_size = _QUALITY_TO_PALETTE_SIZE.get(self._quality, 256)
-
-            #перевод в сотые доли секунды
-            delay_centiseconds = max(1, self._delay_ms // 10)
-
-            temp_fd, temp_path = tempfile.mkstemp(suffix=".gif")
-            os.close(temp_fd)
-
-            settings = GifBuildSettings(
-                image_paths=self._image_paths,
-                palette_size=palette_size,
-                frame_delay_centiseconds=delay_centiseconds,
-                loop_forever=self._loop,
-            )
-
-            #получаем байты GIF от пайплайна
-            gif_bytes = build_gif(settings, progress_callback=self._on_progress)
-
-            #записываем байты на диск через gif_writer
-            written_path = write_gif(gif_bytes, temp_path)
-
-            self.finished.emit(str(written_path))
-
-        except Exception as e:
-            self.error.emit(str(e))
-
-    def _on_progress(self, step: int, total: int, message: str) -> None:
-        self.progress.emit(step, total, message)
-
-
-class GifPreviewLabel(QLabel):
-    clicked = pyqtSignal()
-
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setProperty("class", "gif-preview")
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._movie: Optional[QMovie] = None
-
-    def set_gif(self, gif_path: str) -> None:
-        if self._movie is not None:
-            self._movie.stop()
-
-        self._movie = QMovie(gif_path)
-        self._movie.setScaledSize(
-            self.size().scaled(
-                self.width() - 8,
-                self.height() - 8,
-                Qt.AspectRatioMode.KeepAspectRatio,
-            )
-        )
-        self.setMovie(self._movie)
-        self._movie.start()
-
-    def mousePressEvent(self, event) -> None:
-        self.clicked.emit()
-        super().mousePressEvent(event)
+_VIDEO_EDITOR_HINT = (
+    "Подберите фрагмент видео в редакторе: перематывайте плеером, "
+    "ставьте маркеры и выберите ту часть, что попадёт в GIF"
+)
 
 
 class MainWindow(QMainWindow):
-    LEFT_COLUMN_WIDTH = 700
-    RIGHT_COLUMN_WIDTH = 420
-    GAP_WIDTH = 16
-
     def __init__(self) -> None:
         super().__init__()
-        self._gif_path: Optional[str] = None
-        self._worker: Optional[GifWorker] = None
-        self._setup_ui()
-        self._apply_pixel_theme()
         self.setWindowTitle("GIF Creator")
 
-        total_width = (
-            self.LEFT_COLUMN_WIDTH + self.GAP_WIDTH + self.RIGHT_COLUMN_WIDTH + 40
-        )
-        self.setFixedSize(total_width, 750)
+        self._media: UploadedMedia | None = None
+        self._gif_path: str | None = None
+        self._worker: GifBuildWorker | None = None
+        self._pending_save = False
 
+        self._video_duration_ms = 0
+        self._video_playhead_ms = 0
+        self._video_trim_ms = (0, 0)  # start_ms, end_ms выделенного фрагмента
+        self._video_dialog: VideoEditorDialog | None = None
+
+        self._setup_ui()
+        self.setStyleSheet(THEME_STYLESHEET)
+        self.resize(1180, 760)
+        self.setMinimumSize(1000, 660)
+
+    # построение интерфейса
     def _setup_ui(self) -> None:
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        central = QWidget()
+        self.setCentralWidget(central)
 
-        main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(12)
+        root = QVBoxLayout(central)
+        root.setContentsMargins(GLOBAL_PADDING, GLOBAL_PADDING, GLOBAL_PADDING, GLOBAL_PADDING)
+        root.setSpacing(SPACING)
 
-        header = self._create_header()
-        main_layout.addWidget(header)
+        root.addWidget(self._build_header())
 
-        columns_container = QWidget()
-        columns_layout = QHBoxLayout(columns_container)
-        columns_layout.setContentsMargins(0, 0, 0, 0)
-        columns_layout.setSpacing(self.GAP_WIDTH)
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(SPACING)
 
-        left_panel = self._create_left_panel()
-        left_panel.setFixedWidth(self.LEFT_COLUMN_WIDTH)
-        columns_layout.addWidget(left_panel)
+        sidebar = self._build_sidebar()
+        sidebar.setFixedWidth(SIDEBAR_WIDTH)
+        body.addWidget(sidebar)
 
-        right_panel = self._create_right_panel()
-        right_panel.setFixedWidth(self.RIGHT_COLUMN_WIDTH)
-        columns_layout.addWidget(right_panel)
+        center = self._build_center()
+        body.addWidget(center, stretch=1)
 
-        columns_layout.addStretch()
+        root.addLayout(body, stretch=1)
 
-        main_layout.addWidget(columns_container)
-        main_layout.addStretch()
+        self._bottom_bar = BottomBar()
+        self._bottom_bar.download_requested.connect(self._on_download_clicked)
+        root.addWidget(self._bottom_bar)
 
-    def _create_header(self) -> QWidget:
-        header = QLabel("+--+ GIF CREATOR +--+")
-        header.setProperty("class", "header-title")
-        header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    def _build_header(self) -> QWidget:
+        header = QWidget()
+        header.setObjectName("appHeader")
+        row = QHBoxLayout(header)
+        row.setContentsMargins(4, 0, 4, 0)
+        row.setSpacing(12)
+
+        logo = QLabel()
+        logo.setPixmap(icon("loop", PRIMARY, 28).pixmap(28, 28))
+        row.addWidget(logo)
+
+        title = QLabel("GIF Creator")
+        title.setProperty("headerLevel", "1")
+        row.addWidget(title)
+
+        subtitle = QLabel("создайте анимацию за минуту")
+        subtitle.setProperty("role", "helper")
+        row.addWidget(subtitle)
+
+        row.addStretch()
+
+        media_hint = QLabel("Фото · Видео")
+        media_hint.setProperty("role", "helper")
+        row.addWidget(media_hint)
         return header
 
-    def _create_left_panel(self) -> QWidget:
-        panel = QWidget()
-        panel.setProperty("class", "pixel-box")
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
+    def _build_sidebar(self) -> QWidget:
+        sidebar = QWidget()
+        sidebar.setObjectName("sidebar")
 
-        drop_zone = self._create_drop_zone()
-        layout.addWidget(drop_zone)
+        column = QVBoxLayout(sidebar)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(SPACING)
 
-        self._frame_preview = FramePreviewWidget()
-        layout.addWidget(self._frame_preview)
+        self._upload_zone = UploadZone()
+        self._upload_zone.upload_selected.connect(self._on_media_selected)
+        column.addWidget(self._upload_zone)
 
-        return panel
+        self._parameters = ParameterPanel()
+        self._parameters.any_changed.connect(self._on_settings_changed)
+        column.addWidget(self._parameters, stretch=1)
 
-    def _create_drop_zone(self) -> DropZoneWidget:
-        zone = DropZoneWidget()
-        zone.files_dropped.connect(self._on_files_dropped)
-        zone.clicked.connect(self._on_drop_zone_clicked)
-        return zone
+        return sidebar
 
-    def _create_right_panel(self) -> QWidget:
-        panel = QWidget()
-        panel.setProperty("class", "pixel-box")
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(12)
+    def _build_center(self) -> QWidget:
+        center = QWidget()
 
-        settings_title = QLabel("[ НАСТРОЙКИ ]")
-        settings_title.setProperty("class", "section-title")
-        layout.addWidget(settings_title)
+        column = QVBoxLayout(center)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(SPACING)
 
-        self._settings_panel = SettingsPanel()
-        layout.addWidget(self._settings_panel)
+        self._preview = PreviewView()
+        self._preview.duration_changed.connect(self._on_video_duration_changed)
+        self._preview.playhead_changed.connect(self._on_video_playhead_changed)
+        column.addWidget(self._preview, stretch=1)
 
-        self._create_btn = QPushButton("[ СОЗДАТЬ GIF ]")
-        self._create_btn.setProperty("class", "primary-button")
-        self._create_btn.setMinimumHeight(45)
-        self._create_btn.clicked.connect(self._on_create_gif)
-        layout.addWidget(self._create_btn)
+        # Контекстная зона: миниатюры фото либо приглашение к редактору видео.
+        self._context = QWidget()
+        context_layout = QVBoxLayout(self._context)
+        context_layout.setContentsMargins(0, 0, 0, 0)
+        context_layout.setSpacing(SPACING)
 
-        #статус прогресса для уведомления пользователя
-        self._status_label = QLabel("")
-        self._status_label.setProperty("class", "info-text")
-        self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self._status_label)
+        self._frame_strip = FrameStrip()
+        self._frame_strip.frame_removed.connect(self._on_frame_removed)
+        self._frame_strip.hide()
+        context_layout.addWidget(self._frame_strip)
 
-        result_title = QLabel("[ РЕЗУЛЬТАТ ]")
-        result_title.setProperty("class", "section-title")
-        layout.addWidget(result_title)
+        self._video_editor_card = self._build_video_editor_card()
+        context_layout.addWidget(self._video_editor_card)
 
-        self._gif_preview = GifPreviewLabel()
-        self._gif_preview.setText("[ пусто ]")
-        self._gif_preview.setMinimumHeight(180)
-        self._gif_preview.clicked.connect(self._on_gif_preview_clicked)
-        layout.addWidget(self._gif_preview)
+        column.addWidget(self._context)
 
-        self._download_btn = QPushButton("[ СКАЧАТЬ ]")
-        self._download_btn.setEnabled(False)
-        self._download_btn.clicked.connect(self._on_download_gif)
-        layout.addWidget(self._download_btn)
+        return center
 
-        layout.addStretch()
+    def _build_video_editor_card(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("videoEditorCard")
+        card.hide()
 
-        return panel
+        row = QHBoxLayout(card)
+        row.setContentsMargins(20, 16, 20, 16)
+        row.setSpacing(16)
 
-    def _apply_pixel_theme(self) -> None:
-        self.setStyleSheet(PIXEL_THEME_STYLESHEET)
+        text_col = QVBoxLayout()
+        text_col.setContentsMargins(0, 0, 0, 0)
+        text_col.setSpacing(4)
 
-    def _on_files_dropped(self, image_paths: list[Path]) -> None:
-        """Обрабатывает файлы, перетащенные в зону DropZoneWidget."""
-        current = self._frame_preview.get_image_paths()
-        current.extend(image_paths)
-        self._frame_preview.set_frames(current)
-        self._update_create_button_state()
+        title = QLabel("Работа с видео")
+        title.setProperty("headerLevel", "2")
+        text_col.addWidget(title)
 
-    def _on_drop_zone_clicked(self) -> None:
-        file_dialog = QFileDialog()
-        file_dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
-        file_dialog.setNameFilter(
-            "Images (*.png *.jpg *.jpeg *.gif *.bmp *.webp *.tiff *.tif)"
-        )
-        if file_dialog.exec():
-            file_paths = [Path(f) for f in file_dialog.selectedFiles()]
-            if file_paths:
-                current = self._frame_preview.get_image_paths()
-                current.extend(file_paths)
-                self._frame_preview.set_frames(current)
-                self._update_create_button_state()
+        hint = QLabel(_VIDEO_EDITOR_HINT)
+        hint.setProperty("role", "helper")
+        hint.setWordWrap(True)
+        text_col.addWidget(hint)
 
-    def _update_create_button_state(self) -> None:
-        has_frames = len(self._frame_preview.get_image_paths()) > 0
-        self._create_btn.setEnabled(has_frames)
+        row.addLayout(text_col, stretch=1)
 
-    def _on_create_gif(self) -> None:
-        image_paths = self._frame_preview.get_image_paths()
-        if not image_paths:
-            QMessageBox.warning(self, "Ошибка", "Загрузи изображения!")
+        self._video_edit_button = QPushButton("Открыть редактор")
+        self._video_edit_button.setProperty("buttonStyle", "primary")
+        self._video_edit_button.setIcon(icon("scissors", "#FFFFFF", 16))
+        self._video_edit_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._video_edit_button.setFixedSize(160, 40)
+        self._video_edit_button.clicked.connect(self._open_video_editor)
+        row.addWidget(self._video_edit_button)
+
+        return card
+
+    # сигналы загрузки и настроек
+    def _on_media_selected(self, media: UploadedMedia) -> None:
+        self._cancel_build()
+        self._close_video_editor()
+        self._video_duration_ms = 0
+        self._video_playhead_ms = 0
+        self._video_trim_ms = (0, 0)
+
+        # Добор кадров: фото добавляются к уже загруженной последовательности.
+        if (
+            self._media is not None
+            and self._media.kind is MediaKind.IMAGES
+            and media.kind is MediaKind.IMAGES
+        ):
+            merged = list(self._media.paths)
+            for path in media.paths:
+                if path not in merged:
+                    merged.append(path)
+            media = UploadedMedia(MediaKind.IMAGES, tuple(merged))
+
+        self._media = media
+        self._invalidate_gif()
+        self._upload_zone.clear_error()
+        self._bottom_bar.reset()
+
+        if media.kind is MediaKind.VIDEO:
+            self._show_video_context(media)
+        else:
+            self._show_images_context(media)
+
+        self._download().setEnabled(False)
+
+    def _show_images_context(self, media: UploadedMedia) -> None:
+        self._preview.load_image(media.primary_path)
+        self._video_editor_card.hide()
+        self._frame_strip.set_frames(list(media.paths))
+        self._frame_strip.show()
+
+    def _show_video_context(self, media: UploadedMedia) -> None:
+        self._preview.load_video(media.primary_path)
+        self._frame_strip.clear()
+        self._frame_strip.hide()
+        self._video_editor_card.show()
+
+    def _on_frame_removed(self, _index: int) -> None:
+        if self._media is None or self._media.kind is not MediaKind.IMAGES:
             return
 
-        self._create_btn.setEnabled(False)
-        self._create_btn.setText("[ ЖДИ... ]")
-        self._status_label.setText("[1/6] Подготовка...")
+        remaining = self._frame_strip.get_frames()
+        if not remaining:
+            self._media = None
+            self._preview.clear()
+            self._frame_strip.hide()
+            self._upload_zone.set_hint(_DEFAULT_HINT)
+        else:
+            self._media = UploadedMedia(MediaKind.IMAGES, tuple(remaining))
+            self._preview.load_image(remaining[0])
+        self._invalidate_gif()
 
-        delay_ms = self._settings_panel.get_delay_ms()
-        quality = self._settings_panel.get_quality()
-        loop = self._settings_panel.is_looping()
+    def _on_settings_changed(self, *_args) -> None:
+        if self._media is not None:
+            self._invalidate_gif()
 
-        self._worker = GifWorker(image_paths, delay_ms, quality, loop)
-        self._worker.finished.connect(self._on_gif_created)
-        self._worker.error.connect(self._on_gif_error)
-        self._worker.progress.connect(self._on_progress)
+    def _on_video_duration_changed(self, duration_ms: int) -> None:
+        self._video_duration_ms = max(0, duration_ms)
+        if self._video_dialog is not None:
+            self._video_dialog.trim_panel.set_duration_ms(self._video_duration_ms)
+            self._video_dialog.trim_panel.set_playhead(self._video_playhead_ms)
+
+    def _on_video_trim_changed(self, start_ms: int, end_ms: int) -> None:
+        self._video_trim_ms = (max(0, start_ms), max(0, end_ms))
+        self._on_settings_changed()
+
+    def _on_video_playhead_changed(self, position_ms: int) -> None:
+        self._video_playhead_ms = max(0, position_ms)
+        if self._video_dialog is not None:
+            self._video_dialog.set_playhead(position_ms)
+
+    def _open_video_editor(self) -> None:
+        if self._media is None or self._media.kind is not MediaKind.VIDEO:
+            return
+
+        if self._video_dialog is not None:
+            self._video_dialog.show()
+            self._video_dialog.raise_()
+            self._video_dialog.activateWindow()
+            return
+
+        dialog = VideoEditorDialog(self._media.primary_path, self)
+        dialog.trim_changed.connect(self._on_video_trim_changed)
+        self._video_dialog = dialog
+
+        if self._video_duration_ms > 0:
+            dialog.trim_panel.set_duration_ms(self._video_duration_ms)
+        dialog.trim_panel.set_playhead(self._video_playhead_ms)
+        dialog.show()
+
+    def _close_video_editor(self) -> None:
+        if self._video_dialog is not None:
+            self._video_dialog.close()
+            self._video_dialog = None
+
+    def _video_trim_seconds(self) -> tuple[float, float]:
+        start_ms, end_ms = self._video_trim_ms
+        if self._video_dialog is not None:
+            start_ms, end_ms = self._video_dialog.trim_panel.get_trim()
+        if end_ms <= start_ms:
+            end_ms = max(self._video_duration_ms, start_ms + 1000)
+        return start_ms / 1000.0, end_ms / 1000.0
+
+    # инвалидация результата
+    def _invalidate_gif(self) -> None:
+        self._gif_path = None
+        self._download().setEnabled(False)
+        self._bottom_bar.clear_gif()
+
+    # построение GIF 
+    def _on_download_clicked(self) -> None:
+        if self._media is None:
+            return
+
+        if self._gif_path is not None:
+            self._save_gif()
+            return
+
+        self._pending_save = True
+        self._download().setEnabled(False)
+        self._start_build()
+
+    def _start_build(self) -> None:
+        if self._media is None:
+            return
+
+        if self._media.kind is MediaKind.VIDEO:
+            start_sec, end_sec = self._video_trim_seconds()
+            task = video_task(
+                self._media.primary_path,
+                start_sec=start_sec,
+                end_sec=end_sec,
+                delay_ms=self._parameters.get_delay_ms(),
+                palette_size=self._parameters.get_palette_size(),
+                loop=self._parameters.is_loop(),
+            )
+        else:
+            task = image_sequence_task(
+                list(self._media.paths),
+                delay_ms=self._parameters.get_delay_ms(),
+                palette_size=self._parameters.get_palette_size(),
+                loop=self._parameters.is_loop(),
+            )
+
+        self._worker = GifBuildWorker(task)
+        self._worker.progress.connect(self._on_build_progress)
+        self._worker.finished.connect(self._on_build_finished)
+        self._worker.failed.connect(self._on_build_failed)
         self._worker.start()
 
-    def _on_progress(self, step: int, total: int, message: str) -> None:
-        self._status_label.setText(f"[{step}/{total}] {message}")
+        self._bottom_bar.set_processing(True)
+        self._bottom_bar.set_caption("Начинаю сборку…")
+        self._bottom_bar.set_percent(0)
 
-    def _on_gif_created(self, gif_path: str) -> None:
+    def _on_build_progress(self, step: int, total: int, message: str) -> None:
+        percent = round(step / total * 100)
+        self._bottom_bar.set_percent(percent)
+        self._bottom_bar.set_caption(f"{message} ({step}/{total})")
+
+    def _on_build_finished(self, gif_path: str) -> None:
         self._gif_path = gif_path
-        self._status_label.setText("[ готово! ]")
+        self._preview.show_gif(gif_path)
+        self._bottom_bar.set_gif_thumbnail(gif_path)
+        self._bottom_bar.set_percent(100)
+        self._bottom_bar.set_processing(False)
+        self._bottom_bar.set_caption("Готово")
 
-        self._gif_preview.set_gif(gif_path)
+        if self._pending_save:
+            self._pending_save = False
+            self._save_gif()
 
-        self._download_btn.setEnabled(True)
-        self._create_btn.setEnabled(True)
-        self._create_btn.setText("[ СОЗДАТЬ GIF ]")
+        self._download().setEnabled(True)
 
-    def _on_gif_error(self, error_message: str) -> None:
-        self._status_label.setText("")
-        QMessageBox.critical(self, "Ошибка", error_message)
-        self._create_btn.setEnabled(True)
-        self._create_btn.setText("[ СОЗДАТЬ GIF ]")
+    def _on_build_failed(self, message: str) -> None:
+        self._bottom_bar.set_processing(False)
+        self._bottom_bar.set_error_hint(f"Ошибка: {message}")
+        self._bottom_bar.set_percent(0)
+        QMessageBox.critical(self, "Ошибка сборки GIF", message)
+        self._pending_save = False
+        self._download().setEnabled(True)
 
-    def _on_gif_preview_clicked(self) -> None:
-        if self._gif_path:
-            if sys.platform == "darwin":
-                subprocess.call(["open", self._gif_path])
-            elif sys.platform == "win32":
-                subprocess.call(["start", self._gif_path], shell=True)
-            else:
-                subprocess.call(["xdg-open", self._gif_path])
-
-    def _on_download_gif(self) -> None:
+    # сохранение
+    def _save_gif(self) -> None:
         if not self._gif_path:
             return
 
-        save_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Сохранить GIF",
-            "",
-            "GIF Images (*.gif)",
+        destination, _ = QFileDialog.getSaveFileName(
+            self, "Сохранить GIF", "", _GIF_FILTER
         )
-
-        if not save_path:
+        if not destination:
             return
-
-        if not save_path.lower().endswith(".gif"):
-            save_path += ".gif"
+        if not destination.lower().endswith(".gif"):
+            destination += ".gif"
 
         try:
-            shutil.copy2(self._gif_path, save_path)
-            QMessageBox.information(self, "Готово", f"Сохранено:\n{save_path}")
-        except OSError as e:
-            QMessageBox.critical(self, "Ошибка сохранения", str(e))
+            shutil.copy2(self._gif_path, destination)
+            self._bottom_bar.set_caption("Сохранено")
+            QMessageBox.information(self, "Готово", f"Файл сохранён:\n{destination}")
+        except OSError as error:
+            QMessageBox.critical(self, "Ошибка сохранения", str(error))
+
+    #жизненный цикл
+    def _cancel_build(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.cancel()
+            self._worker.wait()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._cancel_build()
+        self._close_video_editor()
+        super().closeEvent(event)
+
+    # вспомогательные обращения к вложенным виджетам 
+    def _download(self) -> object:
+        return self._bottom_bar.download_button
