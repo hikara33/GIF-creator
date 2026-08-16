@@ -1,5 +1,7 @@
 from PIL import Image
+
 from core.pipeline import GifBuildSettings, build_gif
+
 
 def create_test_frame(path, color, size=(10, 10)):
     image = Image.new("RGB", size, color)
@@ -22,7 +24,10 @@ class TestPipeline:
             create_test_frame(path, color, size=(30, 30))
             frame_paths.append(path)
 
+        output_path = tmp_path / "output.gif"
+
         settings = GifBuildSettings(
+            output_path=output_path,
             image_paths=frame_paths,
             palette_size=64,
             frame_delay_centiseconds=50,
@@ -35,8 +40,8 @@ class TestPipeline:
         assert gif_bytes[:6] == b"GIF89a"
         assert gif_bytes[-1] == 0x3B
 
-        output_path = tmp_path / "output.gif"
-        output_path.write_bytes(gif_bytes)
+        assert output_path.exists()
+        assert output_path.read_bytes() == gif_bytes
 
         with Image.open(output_path) as image:
             assert image.format == "GIF"
@@ -56,11 +61,13 @@ class TestPipeline:
             frame_paths.append(path)
 
         settings_loop = GifBuildSettings(
+            output_path=tmp_path / "loop.gif",
             image_paths=frame_paths,
             loop_forever=True,
         )
 
         settings_no_loop = GifBuildSettings(
+            output_path=tmp_path / "no_loop.gif",
             image_paths=frame_paths,
             loop_forever=False,
         )
@@ -78,12 +85,15 @@ class TestPipeline:
         path = tmp_path / "frame.png"
         create_test_frame(path, (100, 100, 100))
 
+        output_path = tmp_path / "output.gif"
+
         steps_received = []
 
         def on_progress(step, total, message):
             steps_received.append((step, total, message))
 
         settings = GifBuildSettings(
+            output_path=output_path,
             image_paths=[path],
         )
 
@@ -92,11 +102,11 @@ class TestPipeline:
             progress_callback=on_progress,
         )
 
-        assert len(steps_received) == 5
+        assert len(steps_received) == 6
 
         steps = [step for step, _, _ in steps_received]
 
-        assert steps == [1, 2, 3, 4, 5]
+        assert steps == [1, 2, 3, 3, 4, 5]
 
         assert all(
             total == 5
@@ -107,3 +117,10 @@ class TestPipeline:
             isinstance(message, str) and message
             for _, _, message in steps_received
         )
+
+        assert any(
+            "Квантизация кадра 1/1" in message
+            for _, _, message in steps_received
+        )
+
+        assert output_path.exists()
