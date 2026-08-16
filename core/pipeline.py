@@ -21,7 +21,7 @@ ProgressCallback = Callable[[int, int, str], None]
 
 @dataclass
 class GifBuildSettings:
-    output_path: str | Path
+    output_path: str | Path | None = None
 
     image_paths: list[str | Path] | None = None
     preloaded_frames: list | None = None
@@ -138,7 +138,8 @@ def build_gif(
         settings.loop_forever,
     )
 
-    output_path = Path(settings.output_path)
-    output_path.write_bytes(gif_bytes)
+    if settings.output_path is not None:
+        output_path = Path(settings.output_path)
+        output_path.write_bytes(gif_bytes)
 
     return gif_bytes
