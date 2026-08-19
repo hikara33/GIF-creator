@@ -35,6 +35,11 @@ a = Analysis(
             str(project_root / 'gui' / 'resources' / 'theme.qss'),
             'gui/resources'
         ),
+        # Иконка приложения — используется в окне и таскбаре
+        (
+            str(project_root / 'gui' / 'resources' / 'icon.png'),
+            'gui/resources'
+        ),
     ],
 
     # hiddenimports — модули которые PyInstaller не видит через статический анализ.
@@ -122,7 +127,5 @@ exe = EXE(
     # entitlements_file — права приложения на macOS
     entitlements_file=None,
 
-    # icon — иконка приложения
-    # Создай icon.ico (Windows) и icon.icns (macOS) и раскомментируй:
-    # icon=[str(project_root / 'gui' / 'resources' / 'icon.ico')],
+    icon=[str(project_root / 'gui' / 'resources' / 'icon.ico')] if sys.platform == 'win32' else None,
 )
