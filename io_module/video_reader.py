@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -125,7 +126,6 @@ def extract_frames(
     cap.set(cv2.CAP_PROP_POS_MSEC, start_sec * 1000)
 
     loaded_frames: list[LoadedImage] = []
-    last_frame_pos_ms = -1.0
 
     for i, target_ms in enumerate(t * 1000 for t in timestamps):
       current_ms = cap.get(cv2.CAP_PROP_POS_MSEC)

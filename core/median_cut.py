@@ -16,12 +16,10 @@ RGBColor = tuple[int, int, int]
 WeightedColor = tuple[RGBColor, int]  # (цвет, количество вхождений)
 
 
-@dataclass
+@dataclass(eq=False)
 class ColorBucket:
-
-    def __init__(self, colors: np.ndarray, weights: np.ndarray) -> None:
-        self.colors = colors
-        self.weights = weights
+    colors: np.ndarray
+    weights: np.ndarray
 
     def __len__(self) -> int:
         return len(self.colors)
@@ -49,7 +47,7 @@ class ColorBucket:
 
     def weighted_average_color(self) -> RGBColor:
         avg = np.average(self.colors, axis=0, weights=self.weights)
-        return (int(round(avg[0])), int(round(avg[1])), int(round(avg[2])))
+        return (round(avg[0]), round(avg[1]), round(avg[2]))
 
 
 def _pixels_to_unique_numpy(pixels: list[RGBColor]) -> tuple[np.ndarray, np.ndarray]:
