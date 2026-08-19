@@ -1,5 +1,6 @@
 import pytest
 
+
 class TestLZW:
     def test_compress_returns_bytes(self):
         from core.lzw import compress
@@ -55,7 +56,7 @@ class TestLZW:
         assert len(compress(indices_256, palette_size=256)) > 0
 
     def test_gif_header_present_in_output(self):
-        from core.lzw import compress, _calculate_min_code_size
+        from core.lzw import _calculate_min_code_size, compress
 
         indices = [1, 2, 3, 4, 5]
         palette_size = 256

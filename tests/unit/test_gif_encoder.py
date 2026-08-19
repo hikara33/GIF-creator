@@ -6,12 +6,12 @@ from PIL import Image
 
 from core.gif_encoder import (
     GifFrame,
-    encode_gif,
     _split_into_sub_blocks,
+    encode_gif,
 )
 from core.lzw import (
-    compress,
     _calculate_min_code_size,
+    compress,
 )
 
 

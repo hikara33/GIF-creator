@@ -126,6 +126,21 @@ class TestBuildPalette:
 
         assert len(palette) <= 10
 
+    def test_preserves_all_input_colors_when_room_is_available(self):
+        # Доминантный чёрный + красный и зелёный квадраты (как при прозрачном фоне).
+        pixels = [(0, 0, 0)] * 768 + [(255, 0, 0)] * 256 + [(0, 255, 0)] * 256
+
+        palette = build_palette(
+            pixels,
+            palette_size=64,
+        )
+
+        assert set(palette) == {
+            (0, 0, 0),
+            (255, 0, 0),
+            (0, 255, 0),
+        }
+
 
 class TestFindNearestColorIndex:
 

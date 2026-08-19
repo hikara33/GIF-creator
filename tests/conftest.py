@@ -1,7 +1,9 @@
 import random
+
 import pytest
 
 from core.median_cut import build_palette
+
 
 @pytest.fixture
 def random_image():
