@@ -18,7 +18,6 @@ ProgressCallback = Callable[[int, int, str], None]
 
 GifTask = Callable[[ProgressCallback], bytes]
 
-_VIDEO_TARGET_FPS = 10.0
 _VIDEO_MAX_FRAMES = 200
 
 
@@ -32,6 +31,7 @@ def image_sequence_task(
     delay_ms: int,
     palette_size: int,
     loop: bool,
+    use_dithering: bool = True,
 ) -> GifTask:
     def _task(callback: ProgressCallback) -> bytes:
         from core.pipeline import build_gif
@@ -39,7 +39,9 @@ def image_sequence_task(
 
         frames = read_image_sequence(list(image_paths))
         return build_gif(
-            _settings_from_frames(frames, delay_ms, palette_size, loop),
+            _settings_from_frames(
+                frames, delay_ms, palette_size, loop, use_dithering
+            ),
             progress_callback=callback,
         )
 
@@ -51,10 +53,11 @@ def video_task(
     *,
     start_sec: float,
     end_sec: float,
-    delay_ms: int,
+    target_fps: float,
+    scale: float,
     palette_size: int,
     loop: bool,
-    target_fps: float = _VIDEO_TARGET_FPS,
+    use_dithering: bool = True,
     max_frames: int = _VIDEO_MAX_FRAMES,
 ) -> GifTask:
     def _task(callback: ProgressCallback) -> bytes:
@@ -66,13 +69,18 @@ def video_task(
             start_sec=start_sec,
             end_sec=end_sec,
             target_fps=target_fps,
+            scale=scale,
             max_frames=max_frames,
             progress_callback=lambda done, total: callback(
                 done, total, "Извлечение кадров"
             ),
         )
+        # Задержка кадра выводится из fps, чтобы GIF играл в том же темпе.
+        delay_ms = max(20, round(1000 / target_fps))
         return build_gif(
-            _settings_from_frames(frames, delay_ms, palette_size, loop),
+            _settings_from_frames(
+                frames, delay_ms, palette_size, loop, use_dithering
+            ),
             progress_callback=callback,
         )
 
@@ -84,6 +92,7 @@ def _settings_from_frames(
     delay_ms: int,
     palette_size: int,
     loop: bool,
+    use_dithering: bool,
 ) -> GifBuildSettings:
     from core.pipeline import GifBuildSettings
 
@@ -92,6 +101,7 @@ def _settings_from_frames(
         palette_size=palette_size,
         frame_delay_centiseconds=max(1, delay_ms // 10),
         loop_forever=loop,
+        use_dithering=use_dithering,
     )
 
 
@@ -132,7 +142,7 @@ class GifBuildWorker(QThread):
 
         except BuildCancelled:
             return
-        except Exception as error:  
+        except Exception as error:  # noqa: BLE001 — любая ошибка показывается в GUI
             if not self._cancelled:
                 self.failed.emit(str(error))
 
