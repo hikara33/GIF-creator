@@ -35,13 +35,9 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          uv pip install --system \
+          uv pip install \
             pillow numpy scipy opencv-python-headless \
             pytest ruff
-
-
-      - name: Install dependencies
-        run: uv sync --dev
 
       - name: Check core imports
         run: |
